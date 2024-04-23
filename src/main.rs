@@ -1,30 +1,25 @@
+mod typing_test;
+
 use crossterm::{
     event::{self, Event, KeyCode, KeyEvent, KeyModifiers},
-    terminal::{disable_raw_mode, enable_raw_mode},
+    execute, queue,
+    terminal::{
+        disable_raw_mode, enable_raw_mode, Clear, ClearType, EnterAlternateScreen,
+        LeaveAlternateScreen,
+    },
 };
-use rand::seq::SliceRandom;
 
-use std::io::{self, Error, Write};
+use std::io::{self, stdout, Write};
+use typing_test::TypingTest;
 
-use std::fs;
-
-pub enum UserInput {
+enum UserInput {
     Char(char),
     Backspace,
+    Tab,
     Kill,
 }
 
-fn words_from_file(file_path: &str) -> Vec<String> {
-    let content = fs::read_to_string(file_path).expect("Should have been able to read the file");
-    content
-        .split('\n')
-        // don't consider words of length 1
-        .filter(|w| w.len() > 1)
-        .map(|s| String::from(s))
-        .collect()
-}
-
-pub fn read_char() -> Result<UserInput, ()> {
+fn user_input() -> Result<UserInput, ()> {
     enable_raw_mode().expect("should have enabled raw mode");
     let e = match event::read() {
         Ok(Event::Key(key_event)) => key_event,
@@ -56,37 +51,58 @@ pub fn read_char() -> Result<UserInput, ()> {
 
 fn main() -> io::Result<()> {
     let en_1000_words_path = "./src/words/top_1000_en.txt";
-    let words = words_from_file(en_1000_words_path);
+    let mut typing_test = TypingTest::from_file(en_1000_words_path);
+    let mut stdout = stdout();
+
+    execute!(io::stdout(), EnterAlternateScreen)?;
 
     loop {
-        let next_word = words
-            .choose(&mut rand::thread_rng())
-            .expect("Should have been able to choose a random word");
+        let next_word = match typing_test.next_word() {
+            Some(w) => w,
+            None => break,
+        };
 
-        println!("{}", next_word);
-        let mut word_iter = next_word.as_bytes().iter().peekable();
+        let word_chars: Vec<char> = next_word.chars().collect();
+        let mut curr_char = 0;
 
         // read user input char by char
+        let mut curr_user_char = 0;
+        let mut user_word = String::from("");
         loop {
-            let expected_char = match word_iter.peek() {
-                Some(&&c) => c as char,
+            queue!(stdout, Clear(ClearType::All))?;
+            // print the TUI
+            println!("{}", next_word);
+            println!("{}", user_word);
+
+            let expected_char = match word_chars.get(curr_char) {
+                Some(&c) => c as char,
                 None => break,
             };
 
-            match read_char().expect("should have read user input") {
+            match user_input().expect("should have read user input") {
                 UserInput::Char(user_char) => {
-                    if user_char == expected_char {
-                        word_iter.next();
-                    } else {
+                    user_word.push_str(&String::from(user_char));
+                    curr_user_char += 1;
+                    if user_char != expected_char && curr_char != curr_user_char {
                         println!("Wrong. Try again.")
+                    } else {
+                        curr_char += 1;
                     }
                 }
                 UserInput::Backspace => {
-                    todo!("need to implement Backspace");
-                },
+                    curr_user_char = if curr_user_char == 0 { 0 } else { curr_user_char - 1 };
+                    curr_char = if curr_char == 0 { 0 } else { curr_char - 1 };
+                    user_word.pop();
+                }
+
+                UserInput::Tab => {
+                    todo!("need to implement Tab");
+                }
+
                 UserInput::Kill => return Ok(()),
             }
         }
         println!("You wrote the complete word!");
     }
+    execute!(io::stdout(), LeaveAlternateScreen)
 }
